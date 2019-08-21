@@ -1,0 +1,1827 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import pandas as pd\n",
+    "import numpy as np\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Features engineering de pageviews"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Carga de datos"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "data = pd.read_pickle(\"../data/pageviews_total_formateado.pkl\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Funciones auxiliares"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Creacion de ventanas iniciales"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def generar_dataframes_ventana(numero_ventana,dataframe):\n",
+    "    \n",
+    "    if numero_ventana == 4 :   #Para la ventana 4 se necesitan los 11 mil usuarios existentes\n",
+    "        df = pd.read_pickle(\"../data/users.pkl\")\n",
+    "        df.set_index(\"USER_ID\",inplace = True)\n",
+    "    \n",
+    "    else:    \n",
+    "        condicion = dataframe[\"trimestre\"] == numero_ventana\n",
+    "        df = dataframe[condicion][\"USER_ID\"].drop_duplicates().to_frame().set_index(\"USER_ID\").copy()\n",
+    "\n",
+    "    return df.sort_index()\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Generacion de features"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def feature_ya_generado(nombre_feature, trimestre):\n",
+    "    \"\"\"Corrobora si un feature ya fue generado \"\"\"\n",
+    "    \n",
+    "    #Obtengo las columnas que genera ese feature\n",
+    "    columnas = DATOS_FEATURES[nombre_feature][POS_COLUMNAS_DEL_FEATURE]\n",
+    "    for columna in columnas:\n",
+    "        if columna in FEATURES_YA_GENERADOS[trimestre]:\n",
+    "            return True\n",
+    "    return False"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def generar_feature_en_ventana(dataframe,trimestre, nombre_feature, destino):\n",
+    "    \"\"\"Genera un feature en la ventana correspondiente, con los tipos de datos correspondientes\"\"\"\n",
+    "    \n",
+    "    #Calculo el feature\n",
+    "    funcion_feature = FUNCIONES_FEATURES[nombre_feature]\n",
+    "    dataframe = funcion_feature( dataframe[dataframe[\"trimestre\"] == trimestre] )\n",
+    "\n",
+    "    #Uno los features nuevos con los viejos\n",
+    "    dataframe = destino[trimestre].merge(dataframe, left_index = True, right_index= True, how = 'left')\n",
+    "    \n",
+    "    #Rello los nans, si es que los hubiera\n",
+    "    dataframe = dar_formato_al_feature_nuevo(dataframe,nombre_feature)\n",
+    "    \n",
+    "    destino[trimestre] = dataframe"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def dar_formato_al_feature_nuevo(dataframe, nombre_feature):\n",
+    "    \"\"\"Rellena los Nans de un dataframe con features nuevos\"\"\"\n",
+    "    \n",
+    "    \n",
+    "    #Datos para rellenar los Nan\n",
+    "    columnas = DATOS_FEATURES[nombre_feature][POS_COLUMNAS_DEL_FEATURE]\n",
+    "    tipo_dato= DATOS_FEATURES[nombre_feature][POS_TIPO_DATO]\n",
+    "    valor_nan = DATOS_FEATURES[nombre_feature][POS_DATO_NAN]\n",
+    "    \n",
+    "    dataframe.fillna(valor_nan, inplace = True)\n",
+    "    dataframe[columnas] = dataframe[columnas].astype(tipo_dato)\n",
+    "    \n",
+    "    return dataframe\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def generar_features_faltantes(dataframe,destino,trimestre):\n",
+    "    \"\"\"\n",
+    "    Funcion para generar los features faltantes para un trimestre, \n",
+    "    evita la repeticion de calculo de features si estos ya se encuentran generados.\n",
+    "    \n",
+    "    dataframe: Dataframe a partir de cual se calcularan los features.\n",
+    "    destino: Diccionario de ventanas para los que calcular los features.\n",
+    "    trimestre: Numero de ventana a partir de la cual se calculan los features.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    for nombre_feature in FUNCIONES_FEATURES:    \n",
+    "        if feature_ya_generado(nombre_feature, trimestre):\n",
+    "            continue\n",
+    "\n",
+    "        #Si no fueron generados, los genero y actualizo el listado:   \n",
+    "        generar_feature_en_ventana(dataframe,trimestre, nombre_feature, destino)   \n",
+    "        \n",
+    "        #Agrego las columnas nuevas al diccionario\n",
+    "        columnas_generadas = DATOS_FEATURES[nombre_feature][POS_COLUMNAS_DEL_FEATURE]\n",
+    "        FEATURES_YA_GENERADOS[trimestre].extend(columnas_generadas)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "----"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "----"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Cargo features generados hasta el momento\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Trimestre 2 - 3 - 4 para los que tengo datos anteriores\n",
+    "CANT_TRIMESTRES = 4"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TRIMESTRES = {}\n",
+    "trim_no_encontrados =[]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Cargando features\n",
+      "No se encontraron los features, se generarán los dataframe requeridos\n",
+      "No se encontraron los features, se generarán los dataframe requeridos\n",
+      "No se encontraron los features, se generarán los dataframe requeridos\n"
+     ]
+    }
+   ],
+   "source": [
+    "print(\"Cargando features\")\n",
+    "for ventana_nro in range(1,CANT_TRIMESTRES) : #Trimestres del 1 al 3\n",
+    "    try:\n",
+    "        TRIMESTRES[ventana_nro] = pd.read_pickle(\"../data/features/ventana_{}_pageviews.pkl\".format(ventana_nro))\n",
+    "        \n",
+    "    except FileNotFoundError:\n",
+    "        print(\"No se encontraron los features, se generarán los dataframe requeridos\")\n",
+    "        trim_no_encontrados.append(ventana_nro)\n",
+    "    continue\n",
+    "    \n",
+    "for ventana_nro in trim_no_encontrados:    \n",
+    "    TRIMESTRES[ventana_nro] = generar_dataframes_ventana(ventana_nro,data)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Set para predecir"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Cargando features para predecir\n",
+      "No se encontro el feature deseado, se generara el dataframe requerido\n"
+     ]
+    }
+   ],
+   "source": [
+    "try:\n",
+    "    print(\"Cargando features para predecir\")\n",
+    "    TRIMESTRES[4] = pd.read_pickle(\"../data/features/predecir_pageviews.pkl\")\n",
+    "except FileNotFoundError:\n",
+    "    print(\"No se encontro el feature deseado, se generara el dataframe requerido\")\n",
+    "    TRIMESTRES[4] = generar_dataframes_ventana(4,data)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Diccionario de features"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#Posicion dentro del diccionario de features que ocupa la lista de columnas generadas por el mismo\n",
+    "POS_COLUMNAS_DEL_FEATURE = 0\n",
+    "POS_TIPO_DATO = 1\n",
+    "POS_DATO_NAN = 2"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Clave = nombre_feature : Valor = funcion\n",
+    "FUNCIONES_FEATURES = {}\n",
+    "# Clave = nombre_feature : Valor = (columnas,tipo_dato,valor_nan)\n",
+    "DATOS_FEATURES = {}"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 17,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FEATURES_YA_GENERADOS = {}\n",
+    "\n",
+    "for ventana_nro in range (1, CANT_TRIMESTRES + 1):\n",
+    "    \n",
+    "    FEATURES_YA_GENERADOS[ventana_nro] = list(TRIMESTRES[ventana_nro].columns.values)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "\n",
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Creación de features"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Vistazo del dataset: __Pageviews__"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>CONTENT_CATEGORY</th>\n",
+       "      <th>CONTENT_CATEGORY_BOTTOM</th>\n",
+       "      <th>CONTENT_CATEGORY_TOP</th>\n",
+       "      <th>FEC_EVENT</th>\n",
+       "      <th>ON_SITE_SEARCH_TERM</th>\n",
+       "      <th>PAGE</th>\n",
+       "      <th>SITE_ID</th>\n",
+       "      <th>USER_ID</th>\n",
+       "      <th>mes</th>\n",
+       "      <th>trimestre</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2018-01-01 00:09:17</td>\n",
+       "      <td>1</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>7237</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2018-01-01 00:14:17</td>\n",
+       "      <td>1</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>4913</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2018-01-01 00:14:18</td>\n",
+       "      <td>1</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>4913</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2018-01-01 00:14:26</td>\n",
+       "      <td>1</td>\n",
+       "      <td>3</td>\n",
+       "      <td>3</td>\n",
+       "      <td>4913</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2018-01-01 00:14:32</td>\n",
+       "      <td>1</td>\n",
+       "      <td>20</td>\n",
+       "      <td>3</td>\n",
+       "      <td>4913</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "   CONTENT_CATEGORY  CONTENT_CATEGORY_BOTTOM  CONTENT_CATEGORY_TOP  \\\n",
+       "0                 2                        2                     2   \n",
+       "1                 2                        2                     2   \n",
+       "2                 2                        2                     2   \n",
+       "3                 2                        2                     2   \n",
+       "4                 2                        2                     2   \n",
+       "\n",
+       "            FEC_EVENT  ON_SITE_SEARCH_TERM  PAGE  SITE_ID  USER_ID  mes  \\\n",
+       "0 2018-01-01 00:09:17                    1     2        2     7237    1   \n",
+       "1 2018-01-01 00:14:17                    1     2        2     4913    1   \n",
+       "2 2018-01-01 00:14:18                    1     2        2     4913    1   \n",
+       "3 2018-01-01 00:14:26                    1     3        3     4913    1   \n",
+       "4 2018-01-01 00:14:32                    1    20        3     4913    1   \n",
+       "\n",
+       "   trimestre  \n",
+       "0          1  \n",
+       "1          1  \n",
+       "2          1  \n",
+       "3          1  \n",
+       "4          1  "
+      ]
+     },
+     "execution_count": 18,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "data.head()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Funciones auxiliares"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Funcion para rellenar datos de un mes para el que no haya datos"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 19,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def rellenar_columnas_multilevel_faltantes(dataframe,prefijo_columna, dato_nan):\n",
+    "    \"\"\"prefijo_columna:   nombre de la columna de la que se calcularon los datos.\n",
+    "       dato_nan:          dato para rellenar los nan.\n",
+    "       inicio_multilevel: posicion(int) dentro de las columnas donde inicia la seccion a rellenar.\n",
+    "       Devuelve el nombre de las columnas en el orden correcto\"\"\"\n",
+    "    \n",
+    "    for mes in range(1,4):\n",
+    "        \n",
+    "        try:            #si no existe el mes, lo creo\n",
+    "            nombre_col = prefijo_columna+\"{}\".format(mes)\n",
+    "            dataframe[nombre_col] = dataframe[nombre_col].fillna(dato_nan)\n",
+    "  \n",
+    "        except KeyError:\n",
+    "            dataframe[nombre_col] = -1\n",
+    "            \n",
+    "    return [(prefijo_columna+\"{}\".format(mes)) for mes in range(1,4)]\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Cantidad de paginas vista por un usuario en todo el trimestre"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 20,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"cantidad paginas vistas\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def cantidad_de_paginas_vistas(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(\"USER_ID\").agg({\"FEC_EVENT\":\"count\"})\\\n",
+    "                        .rename(columns = {\"FEC_EVENT\":\"cantidad_paginas_vistas_trimestre\"}) \n",
+    "    return feature"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 19,
+=======
+   "execution_count": 21,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = cantidad_de_paginas_vistas"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 20,
+=======
+   "execution_count": 22,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"cantidad_paginas_vistas_trimestre\"] #lista\n",
+    "tipo_dato = \"int64\"\n",
+    "dato_nan = 0\n",
+    "\n",
+    "DATOS_FEATURES[nombre] = (columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Cantidad de paginas vista dentro de cada mes dentro del trimestre"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 21,
+=======
+   "execution_count": 23,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"cantidad paginas vistas mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 22,
+=======
+   "execution_count": 24,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def cantidad_paginas_vistas_por_mes(dataframe):\n",
+    "    \n",
+    "    vistas_por_mes = dataframe.groupby([\"USER_ID\",\"mes\"]).agg({\"trimestre\":\"count\"})\n",
+    "    vistas_por_mes.reset_index(inplace = True)\n",
+    "    vistas_por_mes = vistas_por_mes.pivot(index = \"USER_ID\", columns = \"mes\", values = \"trimestre\")\n",
+    "    \n",
+    "    vistas_por_mes.columns = [\"cant_paginas_vistas_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "\n",
+    "    return vistas_por_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 23,
+=======
+   "execution_count": 25,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = cantidad_paginas_vistas_por_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 24,
+=======
+   "execution_count": 26,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"cant_paginas_vistas_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int64\"\n",
+    "dato_nan = 0\n",
+    "\n",
+    "DATOS_FEATURES[nombre] = (columnas_generadas,tipo_dato,dato_nan) "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Page mas vista cada mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 25,
+=======
+   "execution_count": 27,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"page mas vista mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 26,
+=======
+   "execution_count": 28,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def page_mas_vista_cada_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','PAGE']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "       \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = [\"PAGE\"])\n",
+    "    \n",
+    "    feature.columns = [(\"page_top_en_mes_{}\".format(mes)) for col,mes in feature.columns.values]\n",
+    "    \n",
+    "    \n",
+    "    nombres_col = rellenar_columnas_multilevel_faltantes(feature,\"page_top_en_mes_\",-1)\n",
+    "    \n",
+    "    return feature[nombres_col]"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Funcion vieja"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "def page_mas_vista_cada_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','PAGE']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "    \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = \"PAGE\")\n",
+    "        \n",
+    "    \n",
+    "    #lleno los meses vacios con -1\n",
+    "    feature.columns = [x for x in range(1,4)]\n",
+    "    for mes in range(1,4):\n",
+    "        try:            #si no existe el mes, lo creo\n",
+    "            \n",
+    "            feature[mes] = feature[mes].fillna(-1)\n",
+    "        except KeyError:\n",
+    "            feature.insert(mes,mes,-1)\n",
+    "\n",
+    "                \n",
+    "    feature.columns = [\"page_mas_vista_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "    \n",
+    "    return feature"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 27,
+=======
+   "execution_count": 29,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = page_mas_vista_cada_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 28,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"page_top_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int16\"\n",
+    "dato_nan = -1\n",
+    "\n",
+    "DATOS_FEATURES[nombre]=(columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Cantidad de vistas de la pagina top en cada mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 29,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"vistas pagina top mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 30,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def vistas_pagina_top_por_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','PAGE']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "       \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = [\"trimestre\"])\n",
+    "    \n",
+    "    feature.columns = [(\"vistas_page_top_en_mes_{}\".format(mes)) for col,mes in feature.columns]\n",
+    "    \n",
+    "    \n",
+    "    nombres_col = rellenar_columnas_multilevel_faltantes(feature,\"vistas_page_top_en_mes_\",0)\n",
+    "    \n",
+    "    return feature"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 31,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = vistas_pagina_top_por_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 32,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"vistas_page_top_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int64\"\n",
+    "dato_nan = 0\n",
+    "\n",
+    "DATOS_FEATURES[nombre]=(columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Sitio mas visitado cada mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 33,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"sitio mas buscado cada mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 34,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def sitio_mas_visitado_cada_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','SITE_ID']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "       \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = [\"SITE_ID\"])\n",
+    "    \n",
+    "    feature.columns = [(\"sitio_mas_visitado_en_mes_{}\".format(mes)) for col,mes in feature.columns.values]\n",
+    "    nombres_col = rellenar_columnas_multilevel_faltantes(feature,\"sitio_mas_visitado_en_mes_\",-1)\n",
+    "    \n",
+    "    return feature[nombres_col]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 35,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = sitio_mas_visitado_cada_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 36,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"sitio_mas_visitado_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int16\"\n",
+    "dato_nan = -1\n",
+    "\n",
+    "DATOS_FEATURES[nombre]=(columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Cantidad de vistas sitio mas buscado por mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 37,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"vistas de sitio top por mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 38,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def cantidad_vistas_sitio_top_por_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','SITE_ID']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "       \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = [\"trimestre\"])\n",
+    "    \n",
+    "    feature.columns = [(\"vistas_site_top_mes_{}\".format(mes)) for col,mes in feature.columns.values]\n",
+    "\n",
+    "    nombres_col = rellenar_columnas_multilevel_faltantes(feature,\"vistas_site_top_mes_\",0)\n",
+    "    \n",
+    "    return feature[nombres_col]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 39,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = cantidad_vistas_sitio_top_por_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 40,
+=======
+   "execution_count": 30,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"vistas_site_top_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int64\"\n",
+    "dato_nan = 0\n",
+    "\n",
+    "DATOS_FEATURES[nombre]=(columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Termino mas buscado en cada mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 41,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"termino mas buscado cada mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 42,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def termino_mas_buscado_cada_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','ON_SITE_SEARCH_TERM']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "       \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = [\"ON_SITE_SEARCH_TERM\"])\n",
+    "    \n",
+    "    feature.columns = [(\"termino_top_en_mes_{}\".format(mes)) for col,mes in feature.columns.values]\n",
+    "    \n",
+    "    \n",
+    "    nombres_col = rellenar_columnas_multilevel_faltantes(feature,\"termino_top_en_mes_\",-1)\n",
+    "    \n",
+    "    return feature[nombres_col]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 43,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = termino_mas_buscado_cada_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 44,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"termino_top_en_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int16\"\n",
+    "dato_nan = -1\n",
+    "\n",
+    "DATOS_FEATURES[nombre]=(columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### Cantidad de vistas sitio mas buscado por mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 45,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "nombre = \"busquedas de termino top por mes\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 46,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def cantidad_busquedas_termino_top_por_mes(dataframe):\n",
+    "    \n",
+    "    feature = dataframe.groupby(['USER_ID','mes','ON_SITE_SEARCH_TERM']).agg({'trimestre':'count'})\n",
+    "    index = feature.groupby(['USER_ID','mes'])['trimestre'].transform(max) == feature['trimestre']\n",
+    "    feature = feature[index]\n",
+    "    \n",
+    "    #Elimino duplicados\n",
+    "    feature.reset_index(inplace=True)\n",
+    "    feature = feature.drop_duplicates(subset=['USER_ID','mes'])  \n",
+    "       \n",
+    "    \n",
+    "    #Cambio la forma del dataframe -> indice = USER_ID, columnas = \"meses (1,2,3), valores = \"pagina\"\n",
+    "    feature = feature.pivot(index = \"USER_ID\",columns = \"mes\", values = [\"trimestre\"])\n",
+    "    \n",
+    "    feature.columns = [(\"busquedas_termino_top_mes_{}\".format(mes)) for col,mes in feature.columns.values]\n",
+    "    \n",
+    "    \n",
+    "    nombres_col = rellenar_columnas_multilevel_faltantes(feature,\"busquedas_termino_top_mes_\",0)\n",
+    "    \n",
+    "    return feature[nombres_col]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 47,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "FUNCIONES_FEATURES[nombre] = cantidad_busquedas_termino_top_por_mes"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 48,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "columnas_generadas = [\"busquedas_termino_top_mes_{}\".format(mes) for mes in range(1,4)]\n",
+    "tipo_dato = \"int64\"\n",
+    "dato_nan = 0\n",
+    "\n",
+    "DATOS_FEATURES[nombre]=(columnas_generadas, tipo_dato, dato_nan)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Generacion de features"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 49,
+=======
+   "execution_count": 31,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "for ventana_nro in range(1, CANT_TRIMESTRES + 1):\n",
+    "    generar_features_faltantes(data, TRIMESTRES, ventana_nro)"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 54,
+=======
+   "execution_count": 32,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>cantidad_paginas_vistas_trimestre</th>\n",
+       "      <th>cant_paginas_vistas_en_mes_1</th>\n",
+       "      <th>cant_paginas_vistas_en_mes_2</th>\n",
+       "      <th>cant_paginas_vistas_en_mes_3</th>\n",
+       "      <th>page_top_en_mes_1</th>\n",
+       "      <th>page_top_en_mes_2</th>\n",
+       "      <th>page_top_en_mes_3</th>\n",
+       "      <th>vistas_page_top_en_mes_1</th>\n",
+       "      <th>vistas_page_top_en_mes_2</th>\n",
+       "      <th>vistas_page_top_en_mes_3</th>\n",
+       "      <th>...</th>\n",
+       "      <th>sitio_mas_visitado_en_mes_3</th>\n",
+       "      <th>vistas_site_top_mes_1</th>\n",
+       "      <th>vistas_site_top_mes_2</th>\n",
+       "      <th>vistas_site_top_mes_3</th>\n",
+       "      <th>termino_top_en_mes_1</th>\n",
+       "      <th>termino_top_en_mes_2</th>\n",
+       "      <th>termino_top_en_mes_3</th>\n",
+       "      <th>busquedas_termino_top_mes_1</th>\n",
+       "      <th>busquedas_termino_top_mes_2</th>\n",
+       "      <th>busquedas_termino_top_mes_3</th>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>USER_ID</th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>1841</td>\n",
+       "      <td>710</td>\n",
+       "      <td>375</td>\n",
+       "      <td>756</td>\n",
+       "      <td>10</td>\n",
+       "      <td>10</td>\n",
+       "      <td>10</td>\n",
+       "      <td>140</td>\n",
+       "      <td>73</td>\n",
+       "      <td>114</td>\n",
+       "      <td>...</td>\n",
+       "      <td>2</td>\n",
+       "      <td>640</td>\n",
+       "      <td>332</td>\n",
+       "      <td>575</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>710</td>\n",
+       "      <td>375</td>\n",
+       "      <td>756</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>623</td>\n",
+       "      <td>250</td>\n",
+       "      <td>192</td>\n",
+       "      <td>181</td>\n",
+       "      <td>10</td>\n",
+       "      <td>2</td>\n",
+       "      <td>10</td>\n",
+       "      <td>49</td>\n",
+       "      <td>28</td>\n",
+       "      <td>35</td>\n",
+       "      <td>...</td>\n",
+       "      <td>2</td>\n",
+       "      <td>208</td>\n",
+       "      <td>135</td>\n",
+       "      <td>140</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>250</td>\n",
+       "      <td>192</td>\n",
+       "      <td>181</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>419</td>\n",
+       "      <td>127</td>\n",
+       "      <td>78</td>\n",
+       "      <td>214</td>\n",
+       "      <td>10</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>26</td>\n",
+       "      <td>16</td>\n",
+       "      <td>28</td>\n",
+       "      <td>...</td>\n",
+       "      <td>3</td>\n",
+       "      <td>73</td>\n",
+       "      <td>43</td>\n",
+       "      <td>90</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>127</td>\n",
+       "      <td>78</td>\n",
+       "      <td>214</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>346</td>\n",
+       "      <td>117</td>\n",
+       "      <td>118</td>\n",
+       "      <td>111</td>\n",
+       "      <td>14</td>\n",
+       "      <td>85</td>\n",
+       "      <td>2</td>\n",
+       "      <td>42</td>\n",
+       "      <td>32</td>\n",
+       "      <td>25</td>\n",
+       "      <td>...</td>\n",
+       "      <td>2</td>\n",
+       "      <td>101</td>\n",
+       "      <td>94</td>\n",
+       "      <td>89</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>117</td>\n",
+       "      <td>118</td>\n",
+       "      <td>111</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>1281</td>\n",
+       "      <td>311</td>\n",
+       "      <td>191</td>\n",
+       "      <td>779</td>\n",
+       "      <td>10</td>\n",
+       "      <td>10</td>\n",
+       "      <td>10</td>\n",
+       "      <td>106</td>\n",
+       "      <td>39</td>\n",
+       "      <td>202</td>\n",
+       "      <td>...</td>\n",
+       "      <td>2</td>\n",
+       "      <td>200</td>\n",
+       "      <td>110</td>\n",
+       "      <td>510</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>311</td>\n",
+       "      <td>191</td>\n",
+       "      <td>779</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "<p>5 rows × 22 columns</p>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "         cantidad_paginas_vistas_trimestre  cant_paginas_vistas_en_mes_1  \\\n",
+       "USER_ID                                                                    \n",
+       "0                                     1841                           710   \n",
+       "1                                      623                           250   \n",
+       "2                                      419                           127   \n",
+       "3                                      346                           117   \n",
+       "4                                     1281                           311   \n",
+       "\n",
+       "         cant_paginas_vistas_en_mes_2  cant_paginas_vistas_en_mes_3  \\\n",
+       "USER_ID                                                               \n",
+       "0                                 375                           756   \n",
+       "1                                 192                           181   \n",
+       "2                                  78                           214   \n",
+       "3                                 118                           111   \n",
+       "4                                 191                           779   \n",
+       "\n",
+       "         page_top_en_mes_1  page_top_en_mes_2  page_top_en_mes_3  \\\n",
+       "USER_ID                                                            \n",
+       "0                       10                 10                 10   \n",
+       "1                       10                  2                 10   \n",
+       "2                       10                  2                  2   \n",
+       "3                       14                 85                  2   \n",
+       "4                       10                 10                 10   \n",
+       "\n",
+       "         vistas_page_top_en_mes_1  vistas_page_top_en_mes_2  \\\n",
+       "USER_ID                                                       \n",
+       "0                             140                        73   \n",
+       "1                              49                        28   \n",
+       "2                              26                        16   \n",
+       "3                              42                        32   \n",
+       "4                             106                        39   \n",
+       "\n",
+       "         vistas_page_top_en_mes_3  ...  sitio_mas_visitado_en_mes_3  \\\n",
+       "USER_ID                            ...                                \n",
+       "0                             114  ...                            2   \n",
+       "1                              35  ...                            2   \n",
+       "2                              28  ...                            3   \n",
+       "3                              25  ...                            2   \n",
+       "4                             202  ...                            2   \n",
+       "\n",
+       "         vistas_site_top_mes_1  vistas_site_top_mes_2  vistas_site_top_mes_3  \\\n",
+       "USER_ID                                                                        \n",
+       "0                          640                    332                    575   \n",
+       "1                          208                    135                    140   \n",
+       "2                           73                     43                     90   \n",
+       "3                          101                     94                     89   \n",
+       "4                          200                    110                    510   \n",
+       "\n",
+       "         termino_top_en_mes_1  termino_top_en_mes_2  termino_top_en_mes_3  \\\n",
+       "USER_ID                                                                     \n",
+       "0                           1                     1                     1   \n",
+       "1                           1                     1                     1   \n",
+       "2                           1                     1                     1   \n",
+       "3                           1                     1                     1   \n",
+       "4                           1                     1                     1   \n",
+       "\n",
+       "         busquedas_termino_top_mes_1  busquedas_termino_top_mes_2  \\\n",
+       "USER_ID                                                             \n",
+       "0                                710                          375   \n",
+       "1                                250                          192   \n",
+       "2                                127                           78   \n",
+       "3                                117                          118   \n",
+       "4                                311                          191   \n",
+       "\n",
+       "         busquedas_termino_top_mes_3  \n",
+       "USER_ID                               \n",
+       "0                                756  \n",
+       "1                                181  \n",
+       "2                                214  \n",
+       "3                                111  \n",
+       "4                                779  \n",
+       "\n",
+       "[5 rows x 22 columns]"
+      ]
+     },
+<<<<<<< HEAD
+     "execution_count": 54,
+=======
+     "execution_count": 32,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "TRIMESTRES[1].head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 55,
+=======
+   "execution_count": 33,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>cantidad_paginas_vistas_trimestre</th>\n",
+       "      <th>cant_paginas_vistas_en_mes_1</th>\n",
+       "      <th>cant_paginas_vistas_en_mes_2</th>\n",
+       "      <th>cant_paginas_vistas_en_mes_3</th>\n",
+       "      <th>page_mas_vista_en_mes_1</th>\n",
+       "      <th>page_mas_vista_en_mes_2</th>\n",
+       "      <th>page_mas_vista_en_mes_3</th>\n",
+       "      <th>page_top_en_mes_1</th>\n",
+       "      <th>page_top_en_mes_2</th>\n",
+       "      <th>page_top_en_mes_3</th>\n",
+       "      <th>...</th>\n",
+       "      <th>sitio_mas_visitado_en_mes_3</th>\n",
+       "      <th>vistas_site_top_mes_1</th>\n",
+       "      <th>vistas_site_top_mes_2</th>\n",
+       "      <th>vistas_site_top_mes_3</th>\n",
+       "      <th>termino_top_en_mes_1</th>\n",
+       "      <th>termino_top_en_mes_2</th>\n",
+       "      <th>termino_top_en_mes_3</th>\n",
+       "      <th>busquedas_termino_top_mes_1</th>\n",
+       "      <th>busquedas_termino_top_mes_2</th>\n",
+       "      <th>busquedas_termino_top_mes_3</th>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>USER_ID</th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>1519</td>\n",
+       "      <td>527</td>\n",
+       "      <td>490</td>\n",
+       "      <td>502</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>...</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>477</td>\n",
+       "      <td>138</td>\n",
+       "      <td>140</td>\n",
+       "      <td>199</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>...</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>651</td>\n",
+       "      <td>222</td>\n",
+       "      <td>142</td>\n",
+       "      <td>287</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>21</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>...</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>381</td>\n",
+       "      <td>63</td>\n",
+       "      <td>121</td>\n",
+       "      <td>197</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>...</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>627</td>\n",
+       "      <td>284</td>\n",
+       "      <td>278</td>\n",
+       "      <td>65</td>\n",
+       "      <td>27</td>\n",
+       "      <td>2</td>\n",
+       "      <td>2</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>...</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "      <td>-1</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "<p>5 rows × 28 columns</p>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "         cantidad_paginas_vistas_trimestre  cant_paginas_vistas_en_mes_1  \\\n",
+       "USER_ID                                                                    \n",
+       "0                                     1519                           527   \n",
+       "1                                      477                           138   \n",
+       "2                                      651                           222   \n",
+       "3                                      381                            63   \n",
+       "4                                      627                           284   \n",
+       "\n",
+       "         cant_paginas_vistas_en_mes_2  cant_paginas_vistas_en_mes_3  \\\n",
+       "USER_ID                                                               \n",
+       "0                                 490                           502   \n",
+       "1                                 140                           199   \n",
+       "2                                 142                           287   \n",
+       "3                                 121                           197   \n",
+       "4                                 278                            65   \n",
+       "\n",
+       "         page_mas_vista_en_mes_1  page_mas_vista_en_mes_2  \\\n",
+       "USER_ID                                                     \n",
+       "0                              2                        2   \n",
+       "1                              2                        2   \n",
+       "2                              2                        2   \n",
+       "3                              2                        2   \n",
+       "4                             27                        2   \n",
+       "\n",
+       "         page_mas_vista_en_mes_3  page_top_en_mes_1  page_top_en_mes_2  \\\n",
+       "USER_ID                                                                  \n",
+       "0                              2                 -1                 -1   \n",
+       "1                              2                 -1                 -1   \n",
+       "2                             21                 -1                 -1   \n",
+       "3                              2                 -1                 -1   \n",
+       "4                              2                 -1                 -1   \n",
+       "\n",
+       "         page_top_en_mes_3  ...  sitio_mas_visitado_en_mes_3  \\\n",
+       "USER_ID                     ...                                \n",
+       "0                       -1  ...                           -1   \n",
+       "1                       -1  ...                           -1   \n",
+       "2                       -1  ...                           -1   \n",
+       "3                       -1  ...                           -1   \n",
+       "4                       -1  ...                           -1   \n",
+       "\n",
+       "         vistas_site_top_mes_1  vistas_site_top_mes_2  vistas_site_top_mes_3  \\\n",
+       "USER_ID                                                                        \n",
+       "0                           -1                     -1                     -1   \n",
+       "1                           -1                     -1                     -1   \n",
+       "2                           -1                     -1                     -1   \n",
+       "3                           -1                     -1                     -1   \n",
+       "4                           -1                     -1                     -1   \n",
+       "\n",
+       "         termino_top_en_mes_1  termino_top_en_mes_2  termino_top_en_mes_3  \\\n",
+       "USER_ID                                                                     \n",
+       "0                          -1                    -1                    -1   \n",
+       "1                          -1                    -1                    -1   \n",
+       "2                          -1                    -1                    -1   \n",
+       "3                          -1                    -1                    -1   \n",
+       "4                          -1                    -1                    -1   \n",
+       "\n",
+       "         busquedas_termino_top_mes_1  busquedas_termino_top_mes_2  \\\n",
+       "USER_ID                                                             \n",
+       "0                                 -1                           -1   \n",
+       "1                                 -1                           -1   \n",
+       "2                                 -1                           -1   \n",
+       "3                                 -1                           -1   \n",
+       "4                                 -1                           -1   \n",
+       "\n",
+       "         busquedas_termino_top_mes_3  \n",
+       "USER_ID                               \n",
+       "0                                 -1  \n",
+       "1                                 -1  \n",
+       "2                                 -1  \n",
+       "3                                 -1  \n",
+       "4                                 -1  \n",
+       "\n",
+       "[5 rows x 28 columns]"
+      ]
+     },
+<<<<<<< HEAD
+     "execution_count": 55,
+=======
+     "execution_count": 33,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "TRIMESTRES[4].head()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Guardado"
+   ]
+  },
+  {
+   "cell_type": "code",
+<<<<<<< HEAD
+   "execution_count": 56,
+=======
+   "execution_count": 34,
+>>>>>>> b3e3e45395f11facf08a0277e3ff3295a6fa7bf3
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "for ventana_nro in range(1, CANT_TRIMESTRES ):\n",
+    "    TRIMESTRES[ventana_nro].to_pickle(\"../data/features/ventana_{}_pageviews.pkl\".format(ventana_nro))\n",
+    "\n",
+    "TRIMESTRES[4].to_pickle(\"../data/features/predecir_pageviews.pkl\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.6.8"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
